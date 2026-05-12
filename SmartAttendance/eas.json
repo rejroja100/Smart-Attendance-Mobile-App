@@ -6,13 +6,31 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://smart-attendance-u26i.onrender.com",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "834613996344-7bavji6nf421nevh4adjsv3625i6cse8.apps.googleusercontent.com"
+      }
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://smart-attendance-u26i.onrender.com",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "834613996344-7bavji6nf421nevh4adjsv3625i6cse8.apps.googleusercontent.com"
+      }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://smart-attendance-u26i.onrender.com",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "834613996344-7bavji6nf421nevh4adjsv3625i6cse8.apps.googleusercontent.com"
+      }
     }
   },
   "submit": {
