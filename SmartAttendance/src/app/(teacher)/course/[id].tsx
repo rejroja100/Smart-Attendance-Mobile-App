@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -20,9 +20,14 @@ import {
   useCodeSession,
   useManualAttendance,
   useCourseAttendance,
+  useSessionRoster,
 } from '@/hooks/useAttendance';
 import { useTeacherBroadcast } from '@/hooks/useBluetooth';
-import { exportAttendance, removeStudent as apiRemoveStudent } from '@/services/api';
+import {
+  exportAttendance,
+  removeStudent as apiRemoveStudent,
+  submitManualAttendance,
+} from '@/services/api';
 import { LoadingScreen } from '@/components/LoadingScreen';
 import { ErrorMessage } from '@/components/ErrorMessage';
 import { AttendanceCodeDisplay } from '@/components/AttendanceCodeDisplay';
@@ -38,7 +43,6 @@ import type { Student } from '@/types';
 const B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
-  // Build binary string in chunks to avoid call-stack issues on large payloads.
   let binary = '';
   const chunkSize = 0x8000;
   for (let i = 0; i < bytes.length; i += chunkSize) {
@@ -49,7 +53,6 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   if (typeof g.btoa === 'function') {
     return g.btoa(binary);
   }
-  // Manual fallback.
   let out = '';
   let i = 0;
   while (i < bytes.length) {
@@ -80,24 +83,39 @@ export default function TeacherCourseDetail(): JSX.Element {
   const codeSession = useCodeSession(courseId);
   const [typedCode, setTypedCode] = useState('');
 
-  // Manual marking
+  // Manual tab marking (unchanged)
   const manual = useManualAttendance(course);
   const [filter, setFilter] = useState<Filter>('all');
 
   // Bluetooth broadcast
   const broadcast = useTeacherBroadcast();
-  // Poll attendance to find today's bluetooth marks while broadcasting
-  const todayStr = useMemo(() => formatDate(new Date()), []);
-  const live = useCourseAttendance(courseId, broadcast.broadcasting ? 4000 : null);
-  const detectedStudents = useMemo(() => {
-    if (!course) return [] as Student[];
-    const ids: string[] = [];
-    for (const [studentId, byDate] of Object.entries(live.records ?? {})) {
-      const rec = byDate?.[todayStr];
-      if (rec?.method === 'bluetooth' && rec.present) ids.push(studentId);
+
+  // "Review" flags — true after the teacher stops the session (or the code
+  // timer naturally expires). Review phase shows the sorted roster + counts
+  // + Accept/Discard buttons.
+  const [btReviewing, setBtReviewing] = useState(false);
+  const [codeReviewing, setCodeReviewing] = useState(false);
+
+  // Poll today's attendance records while either session is active so auto-marks
+  // can flow into both rosters in near real-time.
+  const sessionRunning =
+    broadcast.broadcasting ||
+    (codeSession.activeCode !== null && !codeSession.expired);
+  const live = useCourseAttendance(courseId, sessionRunning ? 4000 : null);
+
+  // Shared rosters — one per method. Each watches its own method's records.
+  const btRoster = useSessionRoster(course, live.records ?? {}, 'bluetooth');
+  const codeRoster = useSessionRoster(course, live.records ?? {}, 'code');
+
+  // When the code timer naturally expires (40s tick), auto-transition into review.
+  useEffect(() => {
+    if (codeSession.expired && codeSession.activeCode && !codeReviewing) {
+      setCodeReviewing(true);
     }
-    return course.enrolledStudents.filter((s) => ids.includes(s.id));
-  }, [course, live.records, todayStr]);
+  }, [codeSession.expired, codeSession.activeCode, codeReviewing]);
+
+  // Submit-in-progress flag for the Accept buttons.
+  const [submitting, setSubmitting] = useState<null | 'bluetooth' | 'code'>(null);
 
   // Export
   const [downloading, setDownloading] = useState<'xlsx' | 'csv' | null>(null);
@@ -121,7 +139,111 @@ export default function TeacherCourseDetail(): JSX.Element {
   };
 
   const handleStartCode = async () => {
+    setCodeReviewing(false);
+    codeRoster.reset();
     await codeSession.start(typedCode);
+  };
+
+  const handleStopCodeSession = useCallback(() => {
+    // Don't call codeSession.stop() — that nukes activeCode and the
+    // useEffect would put us back in idle. Just enter review; the
+    // timer keeps ticking but the UI ignores it.
+    setCodeReviewing(true);
+  }, []);
+
+  const handleAcceptCode = async () => {
+    if (!course) return;
+    setSubmitting('code');
+    try {
+      await submitManualAttendance(courseId, codeRoster.toRecords());
+      Alert.alert(
+        'Saved',
+        `Marked ${codeRoster.presentCount} of ${codeRoster.totalCount} students present.`,
+      );
+      codeSession.reset();
+      codeRoster.reset();
+      setCodeReviewing(false);
+      setTypedCode('');
+      await live.refresh();
+    } catch (e) {
+      Alert.alert(
+        'Submit failed',
+        e instanceof Error ? e.message : 'Could not save attendance.',
+      );
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
+  const handleDiscardCode = () => {
+    Alert.alert(
+      'Discard session?',
+      'Throw away the session without saving any attendance?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Discard',
+          style: 'destructive',
+          onPress: () => {
+            codeSession.reset();
+            codeRoster.reset();
+            setCodeReviewing(false);
+            setTypedCode('');
+          },
+        },
+      ],
+    );
+  };
+
+  const handleStartBroadcast = async () => {
+    setBtReviewing(false);
+    btRoster.reset();
+    await broadcast.start(courseId);
+  };
+
+  const handleStopBroadcast = async () => {
+    await broadcast.stop(courseId);
+    setBtReviewing(true);
+  };
+
+  const handleAcceptBluetooth = async () => {
+    if (!course) return;
+    setSubmitting('bluetooth');
+    try {
+      await submitManualAttendance(courseId, btRoster.toRecords());
+      Alert.alert(
+        'Saved',
+        `Marked ${btRoster.presentCount} of ${btRoster.totalCount} students present.`,
+      );
+      btRoster.reset();
+      setBtReviewing(false);
+      await live.refresh();
+    } catch (e) {
+      Alert.alert(
+        'Submit failed',
+        e instanceof Error ? e.message : 'Could not save attendance.',
+      );
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
+  const handleDiscardBluetooth = () => {
+    Alert.alert(
+      'Discard session?',
+      'Throw away the session without saving any attendance?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Discard',
+          style: 'destructive',
+          onPress: () => {
+            btRoster.reset();
+            setBtReviewing(false);
+          },
+        },
+      ],
+    );
   };
 
   const handleSubmitManual = async () => {
@@ -129,14 +251,6 @@ export default function TeacherCourseDetail(): JSX.Element {
     if (ok) {
       Alert.alert('Saved', `Marked ${manual.presentCount} of ${manual.totalCount} students present.`);
     }
-  };
-
-  const handleStartBroadcast = async () => {
-    await broadcast.start(courseId);
-  };
-
-  const handleStopBroadcast = async () => {
-    await broadcast.stop(courseId);
   };
 
   const handleDownload = async (format: 'xlsx' | 'csv') => {
@@ -218,6 +332,20 @@ export default function TeacherCourseDetail(): JSX.Element {
     return filter === 'present' ? present : !present;
   });
 
+  // Bluetooth tab phase
+  const btPhase: 'idle' | 'active' | 'review' = btReviewing
+    ? 'review'
+    : broadcast.broadcasting
+    ? 'active'
+    : 'idle';
+
+  // Code tab phase
+  const codePhase: 'idle' | 'active' | 'review' = codeReviewing
+    ? 'review'
+    : codeSession.activeCode !== null && !codeSession.expired
+    ? 'active'
+    : 'idle';
+
   return (
     <SafeAreaView className="flex-1 bg-slate-950">
       <View className="px-5 pt-2 flex-row items-center">
@@ -293,77 +421,115 @@ export default function TeacherCourseDetail(): JSX.Element {
               Bluetooth detection
             </Text>
             <Text className="text-slate-400 text-xs mb-4">
-              Students nearby will be detected automatically.
+              Students nearby will be detected automatically. Override their status to prevent cheating.
             </Text>
 
-            <View className="items-center py-4">
-              <BluetoothScanner active={broadcast.broadcasting} label="Broadcasting…" />
-            </View>
-
-            {broadcast.fallback && broadcast.broadcasting ? (
-              <Text className="text-amber-300 text-xs text-center mb-3">
-                Native BLE advertising is unavailable on this device — using server fallback.
-              </Text>
+            {btPhase === 'idle' ? (
+              <View>
+                <View className="items-center py-4">
+                  <BluetoothScanner active={false} />
+                </View>
+                <ErrorMessage message={broadcast.error} />
+                <Pressable
+                  onPress={handleStartBroadcast}
+                  disabled={broadcast.starting}
+                  className={`rounded-xl bg-sky-600 py-3 items-center ${
+                    broadcast.starting ? 'opacity-60' : 'active:opacity-80'
+                  }`}
+                >
+                  <Text className="text-white font-semibold">
+                    {broadcast.starting ? 'Starting…' : 'Start Broadcasting'}
+                  </Text>
+                </Pressable>
+              </View>
             ) : null}
 
-            <ErrorMessage message={broadcast.error} />
-
-            {!broadcast.broadcasting ? (
-              <Pressable
-                onPress={handleStartBroadcast}
-                disabled={broadcast.starting}
-                className={`rounded-xl bg-sky-600 py-3 items-center ${
-                  broadcast.starting ? 'opacity-60' : 'active:opacity-80'
-                }`}
-              >
-                <Text className="text-white font-semibold">
-                  {broadcast.starting ? 'Starting…' : 'Start Broadcasting'}
-                </Text>
-              </Pressable>
-            ) : (
+            {btPhase === 'active' ? (
               <View>
+                <View className="items-center py-3">
+                  <BluetoothScanner active label="Broadcasting…" size={120} />
+                </View>
+                {broadcast.fallback ? (
+                  <Text className="text-amber-300 text-xs text-center mb-2">
+                    Native BLE advertising unavailable on this device — using server fallback.
+                  </Text>
+                ) : null}
+                <SessionStats
+                  present={btRoster.presentCount}
+                  absent={btRoster.absentCount}
+                  total={btRoster.totalCount}
+                />
+                <RosterList
+                  students={btRoster.enrolledOrder}
+                  marks={btRoster.marks}
+                  onToggle={btRoster.setMark}
+                />
                 <Pressable
                   onPress={handleStopBroadcast}
-                  className="rounded-xl bg-red-600 py-3 items-center active:opacity-80"
+                  className="rounded-xl bg-red-600 py-3 items-center active:opacity-80 mt-3"
                 >
                   <Text className="text-white font-semibold">Stop Broadcasting</Text>
                 </Pressable>
-                <Text className="text-slate-300 text-sm font-semibold mt-4 mb-2">
-                  Detected students ({detectedStudents.length})
-                </Text>
-                {detectedStudents.length === 0 ? (
-                  <Text className="text-slate-500 text-xs">
-                    Waiting for students to mark attendance…
-                  </Text>
-                ) : (
-                  detectedStudents.map((s) => (
-                    <StudentListItem key={s.id} student={s} mode="view" />
-                  ))
-                )}
               </View>
-            )}
+            ) : null}
+
+            {btPhase === 'review' ? (
+              <View>
+                <View className="rounded-xl bg-emerald-600/15 border border-emerald-600/40 p-3 mb-3">
+                  <Text className="text-emerald-300 text-xs">
+                    Session ended. Review the list — absent students first. Tap Accept to save attendance.
+                  </Text>
+                </View>
+                <SessionStats
+                  present={btRoster.presentCount}
+                  absent={btRoster.absentCount}
+                  total={btRoster.totalCount}
+                />
+                <RosterList
+                  students={btRoster.sortedAbsentFirst}
+                  marks={btRoster.marks}
+                  onToggle={btRoster.setMark}
+                />
+                <View className="flex-row mt-3">
+                  <Pressable
+                    onPress={handleDiscardBluetooth}
+                    disabled={submitting !== null}
+                    className={`flex-1 mr-2 rounded-xl bg-slate-700 py-3 items-center ${
+                      submitting !== null ? 'opacity-60' : 'active:opacity-80'
+                    }`}
+                  >
+                    <Text className="text-white font-semibold">Discard</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={handleAcceptBluetooth}
+                    disabled={submitting !== null}
+                    className={`flex-1 ml-2 rounded-xl bg-emerald-600 py-3 items-center ${
+                      submitting !== null ? 'opacity-60' : 'active:opacity-80'
+                    }`}
+                  >
+                    {submitting === 'bluetooth' ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text className="text-white font-semibold">Accept Attendance</Text>
+                    )}
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
           </View>
         ) : null}
 
         {/* CODE TAB */}
         {tab === 'code' ? (
           <View className="mb-4">
-            {!codeSession.activeCode || codeSession.expired ? (
+            {codePhase === 'idle' ? (
               <View className="bg-slate-800 rounded-2xl p-5">
                 <Text className="text-white text-base font-semibold mb-1">
                   Instructor code
                 </Text>
                 <Text className="text-slate-400 text-xs mb-4">
-                  Create a 6-character code and share it with students. The code will expire after {CODE_DURATION_SECONDS} seconds.
+                  Create a 6-character code and share it with students. The code expires after {CODE_DURATION_SECONDS} seconds.
                 </Text>
-
-                {codeSession.expired ? (
-                  <View className="rounded-xl bg-red-600/15 border border-red-600/40 p-3 mb-3">
-                    <Text className="text-red-300 text-xs">
-                      Previous code expired. Type a new code below to start a new session.
-                    </Text>
-                  </View>
-                ) : null}
 
                 <TextInput
                   value={typedCode}
@@ -395,25 +561,74 @@ export default function TeacherCourseDetail(): JSX.Element {
                   )}
                 </Pressable>
               </View>
-            ) : (
-              <View>
+            ) : null}
+
+            {codePhase === 'active' && codeSession.activeCode ? (
+              <View className="bg-slate-800 rounded-2xl p-5">
                 <AttendanceCodeDisplay
                   code={codeSession.activeCode}
                   secondsLeft={codeSession.secondsLeft}
                   totalSeconds={CODE_DURATION_SECONDS}
-                  onStop={codeSession.stop}
+                  onStop={handleStopCodeSession}
                 />
-                <Pressable
-                  onPress={() => {
-                    codeSession.reset();
-                    setTypedCode('');
-                  }}
-                  className="mt-3 rounded-xl bg-slate-700 py-3 items-center active:opacity-80"
-                >
-                  <Text className="text-white font-semibold">New Code</Text>
-                </Pressable>
+                <View className="mt-4">
+                  <SessionStats
+                    present={codeRoster.presentCount}
+                    absent={codeRoster.absentCount}
+                    total={codeRoster.totalCount}
+                  />
+                  <RosterList
+                    students={codeRoster.enrolledOrder}
+                    marks={codeRoster.marks}
+                    onToggle={codeRoster.setMark}
+                  />
+                </View>
               </View>
-            )}
+            ) : null}
+
+            {codePhase === 'review' ? (
+              <View className="bg-slate-800 rounded-2xl p-5">
+                <View className="rounded-xl bg-emerald-600/15 border border-emerald-600/40 p-3 mb-3">
+                  <Text className="text-emerald-300 text-xs">
+                    Code session ended. Review the list — absent students first. Tap Accept to save attendance.
+                  </Text>
+                </View>
+                <SessionStats
+                  present={codeRoster.presentCount}
+                  absent={codeRoster.absentCount}
+                  total={codeRoster.totalCount}
+                />
+                <RosterList
+                  students={codeRoster.sortedAbsentFirst}
+                  marks={codeRoster.marks}
+                  onToggle={codeRoster.setMark}
+                />
+                <View className="flex-row mt-3">
+                  <Pressable
+                    onPress={handleDiscardCode}
+                    disabled={submitting !== null}
+                    className={`flex-1 mr-2 rounded-xl bg-slate-700 py-3 items-center ${
+                      submitting !== null ? 'opacity-60' : 'active:opacity-80'
+                    }`}
+                  >
+                    <Text className="text-white font-semibold">Discard</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={handleAcceptCode}
+                    disabled={submitting !== null}
+                    className={`flex-1 ml-2 rounded-xl bg-emerald-600 py-3 items-center ${
+                      submitting !== null ? 'opacity-60' : 'active:opacity-80'
+                    }`}
+                  >
+                    {submitting === 'code' ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text className="text-white font-semibold">Accept Attendance</Text>
+                    )}
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
           </View>
         ) : null}
 
@@ -536,5 +751,86 @@ export default function TeacherCourseDetail(): JSX.Element {
         <View className="h-12" />
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+// ---------- Local sub-components ----------
+
+function SessionStats({
+  present,
+  absent,
+  total,
+}: {
+  present: number;
+  absent: number;
+  total: number;
+}): JSX.Element {
+  return (
+    <View className="flex-row mb-3">
+      <StatPill label="Present" value={present} tone="good" />
+      <StatPill label="Absent" value={absent} tone="danger" />
+      <StatPill label="Total" value={total} tone="neutral" />
+    </View>
+  );
+}
+
+function StatPill({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: 'good' | 'danger' | 'neutral';
+}): JSX.Element {
+  const bg =
+    tone === 'good'
+      ? 'bg-emerald-600/20'
+      : tone === 'danger'
+      ? 'bg-red-600/20'
+      : 'bg-slate-700';
+  const fg =
+    tone === 'good'
+      ? 'text-emerald-300'
+      : tone === 'danger'
+      ? 'text-red-300'
+      : 'text-slate-200';
+  return (
+    <View className={`flex-1 mx-1 rounded-xl py-2.5 items-center ${bg}`}>
+      <Text className={`text-xs ${fg}`}>{label}</Text>
+      <Text className={`text-xl font-bold mt-0.5 ${fg}`}>{value}</Text>
+    </View>
+  );
+}
+
+function RosterList({
+  students,
+  marks,
+  onToggle,
+}: {
+  students: Student[];
+  marks: Record<string, boolean>;
+  onToggle: (studentId: string, present: boolean) => void;
+}): JSX.Element {
+  if (students.length === 0) {
+    return (
+      <Text className="text-slate-500 text-sm py-3">
+        No students enrolled yet.
+      </Text>
+    );
+  }
+  return (
+    <View>
+      {students.map((s) => (
+        <StudentListItem
+          key={s.id}
+          student={s}
+          mode="mark"
+          present={marks[s.id] ?? false}
+          onMarkPresent={() => onToggle(s.id, true)}
+          onMarkAbsent={() => onToggle(s.id, false)}
+        />
+      ))}
+    </View>
   );
 }

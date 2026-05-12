@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   submitCode as apiSubmitCode,
   verifyStudentCode as apiVerifyCode,
@@ -7,11 +7,14 @@ import {
   getCourseAttendance as apiCourseAttendance,
 } from '@/services/api';
 import { CODE_DURATION_SECONDS } from '@/utils/constants';
+import { formatDate } from '@/utils/helpers';
 import type {
   AttendanceCode,
+  AttendanceMethod,
   AttendanceRecord,
   Course,
   DashboardCourse,
+  Student,
 } from '@/types';
 
 // ---------- Teacher: code session ----------
@@ -330,4 +333,142 @@ export function useCourseAttendance(
   }, [pollMs, courseId, load]);
 
   return { records, dates, loading, error, refresh: load };
+}
+
+// ---------- Teacher: session roster (Bluetooth / Code) ----------
+//
+// During a Bluetooth broadcast or Code session, the teacher sees the entire
+// enrolled-students list. Everyone starts as ABSENT. When a student is
+// auto-detected (their attendance record appears with the matching `method`
+// for today), they flip to PRESENT — unless the teacher has already
+// manually overridden that student, in which case the teacher's choice
+// wins (to prevent cheating).
+//
+// On Accept, the parent calls `useManualAttendance`-style submission with
+// every student in the roster, which goes through `/api/attendance/manual`
+// — the backend now replaces today's records, so manual is the final word.
+
+interface UseSessionRosterResult {
+  marks: Record<string, boolean>;
+  setMark: (studentId: string, present: boolean) => void;
+  presentCount: number;
+  absentCount: number;
+  totalCount: number;
+  /** Roster sorted with absent students first, then present (review view). */
+  sortedAbsentFirst: Student[];
+  /** Roster in the original enrolled order (active session view). */
+  enrolledOrder: Student[];
+  /** Returns the array shape `submitManualAttendance` expects. */
+  toRecords: () => { studentId: string; present: boolean }[];
+  /** Reset all marks back to absent and clear overrides. */
+  reset: () => void;
+}
+
+export function useSessionRoster(
+  course: Course | null,
+  records: Record<string, Record<string, AttendanceRecord>>,
+  method: AttendanceMethod,
+): UseSessionRosterResult {
+  const [marks, setMarks] = useState<Record<string, boolean>>({});
+  const overriddenRef = useRef<Set<string>>(new Set());
+
+  // Initialize marks whenever the course changes — everyone absent by default.
+  useEffect(() => {
+    if (!course) {
+      setMarks({});
+      overriddenRef.current = new Set();
+      return;
+    }
+    setMarks((prev) => {
+      const next: Record<string, boolean> = {};
+      for (const s of course.enrolledStudents) {
+        next[s.id] = prev[s.id] ?? false;
+      }
+      return next;
+    });
+  }, [course]);
+
+  // Auto-mark from polled attendance records. Only flips a student to PRESENT
+  // (never back to absent) and only if the teacher hasn't manually overridden
+  // that student. The auto-mark also matches the active session's method, so
+  // a stale code-tab record doesn't flip a student during a bluetooth session.
+  const todayStr = useMemo(() => formatDate(new Date()), []);
+  useEffect(() => {
+    if (!course) return;
+    setMarks((prev) => {
+      let next: Record<string, boolean> | null = null;
+      for (const s of course.enrolledStudents) {
+        if (overriddenRef.current.has(s.id)) continue;
+        const rec = records?.[s.id]?.[todayStr];
+        if (!rec || !rec.present) continue;
+        if (rec.method !== method) continue;
+        if (!prev[s.id]) {
+          if (!next) next = { ...prev };
+          next[s.id] = true;
+        }
+      }
+      return next ?? prev;
+    });
+  }, [course, records, method, todayStr]);
+
+  const setMark = useCallback((studentId: string, present: boolean) => {
+    overriddenRef.current.add(studentId);
+    setMarks((prev) => ({ ...prev, [studentId]: present }));
+  }, []);
+
+  const reset = useCallback(() => {
+    overriddenRef.current = new Set();
+    if (!course) {
+      setMarks({});
+      return;
+    }
+    const next: Record<string, boolean> = {};
+    for (const s of course.enrolledStudents) next[s.id] = false;
+    setMarks(next);
+  }, [course]);
+
+  const enrolledOrder = useMemo(
+    () => (course ? course.enrolledStudents : []),
+    [course],
+  );
+
+  const sortedAbsentFirst = useMemo(() => {
+    if (!course) return [] as Student[];
+    return [...course.enrolledStudents].sort((a, b) => {
+      const ap = marks[a.id] ? 1 : 0;
+      const bp = marks[b.id] ? 1 : 0;
+      if (ap !== bp) return ap - bp;
+      const ar = (a.roll || a.name || '').toString();
+      const br = (b.roll || b.name || '').toString();
+      return ar.localeCompare(br);
+    });
+  }, [course, marks]);
+
+  const presentCount = useMemo(
+    () => Object.values(marks).filter(Boolean).length,
+    [marks],
+  );
+  const totalCount = course?.enrolledStudents.length ?? 0;
+  const absentCount = totalCount - presentCount;
+
+  const toRecords = useCallback(
+    () =>
+      Object.entries(marks).map(([studentId, present]) => ({
+        studentId,
+        present: !!present,
+      })),
+    [marks],
+  );
+
+  return {
+    marks,
+    setMark,
+    presentCount,
+    absentCount,
+    totalCount,
+    sortedAbsentFirst,
+    enrolledOrder,
+    toRecords,
+    reset,
+  };
 }

@@ -22,11 +22,21 @@ def _attendance_doc_id(course_id: str, student_id: str) -> str:
     return f"{course_id}_{student_id}"
 
 
-def _record_attendance(course_id: str, student_id: str, method: str, present: bool = True) -> dict:
+def _record_attendance(
+    course_id: str,
+    student_id: str,
+    method: str,
+    present: bool = True,
+    replace_today: bool = False,
+) -> dict:
     """Append an attendance record to attendance/{courseId}_{studentId}.
 
     Uses set(merge=True) to ensure parent doc exists, then reads-modifies-writes
-    the records list so multiple records per day are preserved (kept as history).
+    the records list. By default appends so multiple records per day are kept
+    as history. When `replace_today=True`, any existing records for today are
+    removed first so the new entry becomes the only record for that day — the
+    teacher's manual "Accept" submit uses this to override any auto bluetooth/
+    code records a student created earlier in the same session.
     """
     database = _require_db()
     doc_id = _attendance_doc_id(course_id, student_id)
@@ -44,8 +54,12 @@ def _record_attendance(course_id: str, student_id: str, method: str, present: bo
     data = snap.to_dict() or {}
     records: list = list(data.get("records", []) or [])
 
+    today = today_str()
+    if replace_today:
+        records = [r for r in records if r.get("date") != today]
+
     new_record = {
-        "date": today_str(),
+        "date": today,
         "present": bool(present),
         "method": method,
         "timestamp": now_iso(),
@@ -143,7 +157,13 @@ def submit_manual(course_id: str, teacher_uid: str, records: Iterable) -> dict:
         present = getattr(rec, "present", None)
         if present is None:
             present = rec.get("present")
-        _record_attendance(course_id, student_id, "manual", present=bool(present))
+        _record_attendance(
+            course_id,
+            student_id,
+            "manual",
+            present=bool(present),
+            replace_today=True,
+        )
         count += 1
 
     return {"success": True, "count": count}
