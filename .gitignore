@@ -23,7 +23,6 @@ SmartAttendance/dist/
 SmartAttendance/web-build/
 SmartAttendance/android/
 SmartAttendance/ios/
-SmartAttendance/google-services.json
 SmartAttendance/GoogleService-Info.plist
 SmartAttendance/.env
 *.log
