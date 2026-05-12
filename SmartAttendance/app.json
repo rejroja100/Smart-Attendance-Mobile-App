@@ -1,0 +1,55 @@
+{
+  "expo": {
+    "name": "Smart Attendance",
+    "slug": "smart-attendance",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "smartattendance",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#0f172a"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.smartattendance.app"
+    },
+    "android": {
+      "package": "com.smartattendance.app",
+      "googleServicesFile": "./google-services.json",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
+        "BLUETOOTH_SCAN",
+        "BLUETOOTH_CONNECT",
+        "BLUETOOTH_ADVERTISE"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "@react-native-firebase/app",
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.YOUR_REVERSED_CLIENT_ID"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "648b5798-064c-445c-9426-c7cd6c32f70a"
+      }
+    }
+  }
+}
