@@ -1,6 +1,48 @@
-import { Platform } from 'react-native';
+import { PermissionsAndroid, Platform } from 'react-native';
 import { BLE_SERVICE_PREFIX } from '@/utils/constants';
 import { startBluetoothSession, stopBluetoothSession } from './api';
+
+// On Android 12+ (API 31+) the BLUETOOTH_SCAN / BLUETOOTH_CONNECT /
+// BLUETOOTH_ADVERTISE permissions must be requested at runtime — declaring
+// them in app.json/AndroidManifest.xml alone isn't enough. Older Android
+// versions instead use ACCESS_FINE_LOCATION for BLE scanning.
+
+type PermissionGroup = 'advertise' | 'scan';
+
+async function ensureBluetoothPermissions(group: PermissionGroup): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+  const apiLevel = typeof Platform.Version === 'number' ? Platform.Version : parseInt(String(Platform.Version), 10);
+
+  const perms: string[] = [];
+  if (apiLevel >= 31) {
+    if (group === 'advertise') {
+      perms.push(PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE);
+      perms.push(PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT);
+    } else {
+      perms.push(PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN);
+      perms.push(PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT);
+    }
+  } else {
+    // Pre-Android-12: scanning needs FINE_LOCATION; advertising is gated by BLUETOOTH_ADMIN
+    // which is install-time and already declared in the manifest.
+    if (group === 'scan') {
+      perms.push(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION);
+    }
+  }
+
+  if (perms.length === 0) return true;
+
+  try {
+    const result = await PermissionsAndroid.requestMultiple(perms);
+    return Object.values(result).every((r) => r === PermissionsAndroid.RESULTS.GRANTED);
+  } catch (e) {
+    if (__DEV__) {
+      // eslint-disable-next-line no-console
+      console.warn('[bluetooth] permission request failed:', e);
+    }
+    return false;
+  }
+}
 
 // We use two BLE libraries on purpose:
 //   - react-native-ble-advertiser → teacher broadcasts (BLE peripheral)
@@ -195,12 +237,28 @@ export async function startTeacherBroadcast(courseId: string): Promise<{
     };
   }
 
+  // Android 12+ requires runtime BLUETOOTH_ADVERTISE permission.
+  const granted = await ensureBluetoothPermissions('advertise');
+  if (!granted) {
+    return {
+      ok: true,
+      fallback: true,
+      deviceId,
+      error:
+        'Bluetooth permission was not granted. Allow Nearby devices in Settings, then try again.',
+    };
+  }
+
   try {
     await advertiser.broadcast(uuid, [], {
       advertiseMode: 2, // ADVERTISE_MODE_LOW_LATENCY
       txPowerLevel: 3, // ADVERTISE_TX_POWER_HIGH (~ +1 dBm, best range)
       connectable: false,
-      includeDeviceName: true,
+      // Drop the device name from the advertising packet — a 128-bit UUID
+      // already eats ~18 bytes and the BLE adv packet is capped at 31 bytes.
+      // The student scanner matches on UUID anyway.
+      includeDeviceName: false,
+      includeTxPowerLevel: false,
     });
     advertising = true;
     return { ok: true, fallback: false, deviceId };
@@ -278,6 +336,17 @@ export async function scanForCourse(
     if (__DEV__) {
       // eslint-disable-next-line no-console
       console.warn('[bluetooth] scan unavailable — BLE manager module missing.');
+    }
+    return null;
+  }
+
+  // Android 12+ requires runtime BLUETOOTH_SCAN/CONNECT. Older versions need
+  // ACCESS_FINE_LOCATION. Without these the scan throws synchronously.
+  const granted = await ensureBluetoothPermissions('scan');
+  if (!granted) {
+    if (__DEV__) {
+      // eslint-disable-next-line no-console
+      console.warn('[bluetooth] scan permission denied');
     }
     return null;
   }
