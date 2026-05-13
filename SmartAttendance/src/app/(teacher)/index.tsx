@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
+  Alert,
   Modal,
   Pressable,
   RefreshControl,
@@ -15,6 +16,7 @@ import { useCourses } from '@/hooks/useCourses';
 import { CourseCard } from '@/components/CourseCard';
 import { LoadingScreen } from '@/components/LoadingScreen';
 import { ErrorMessage } from '@/components/ErrorMessage';
+import type { Course } from '@/types';
 
 export default function TeacherHome(): JSX.Element {
   const router = useRouter();
@@ -26,6 +28,7 @@ export default function TeacherHome(): JSX.Element {
     error,
     refresh,
     createCourse,
+    deleteCourse,
   } = useCourses('teacher');
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -38,6 +41,30 @@ export default function TeacherHome(): JSX.Element {
     () => courses.reduce((acc, c) => acc + (c.studentIds?.length ?? 0), 0),
     [courses],
   );
+
+  const handleDeleteCourse = (course: Course) => {
+    Alert.alert(
+      'Remove course?',
+      `"${course.name}" (${course.code}) and all of its attendance history will be permanently deleted. This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteCourse(course.id);
+            } catch (e) {
+              Alert.alert(
+                'Could not remove course',
+                e instanceof Error ? e.message : 'Please try again.',
+              );
+            }
+          },
+        },
+      ],
+    );
+  };
 
   const handleCreate = async () => {
     setCreateError(null);
@@ -147,6 +174,8 @@ export default function TeacherHome(): JSX.Element {
                   onPress={() =>
                     router.push(`/(teacher)/course/${course.id}` as never)
                   }
+                  onLongPress={() => handleDeleteCourse(course)}
+                  onDelete={() => handleDeleteCourse(course)}
                 />
               </View>
             ))}
