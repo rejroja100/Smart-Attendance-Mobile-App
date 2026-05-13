@@ -7,8 +7,6 @@ interface CourseCardProps {
   course: Course;
   onPress?: () => void;
   onLongPress?: () => void;
-  /** When provided, a small ✕ button appears in the corner that calls this on tap. */
-  onDelete?: () => void;
   showInstructor?: boolean;
 }
 
@@ -16,7 +14,6 @@ export function CourseCard({
   course,
   onPress,
   onLongPress,
-  onDelete,
   showInstructor = false,
 }: CourseCardProps): JSX.Element {
   const accent = randomColor(course.id || course.code);
@@ -31,31 +28,15 @@ export function CourseCard({
     >
       <View className={`h-2 w-full ${accent}`} />
       <View className="p-4">
-        <View className="flex-row items-start">
-          <View className="flex-1 pr-1">
-            <Text
-              className="text-white text-base font-semibold"
-              numberOfLines={2}
-            >
-              {course.name}
-            </Text>
-            <Text className="text-slate-400 text-xs mt-1" numberOfLines={1}>
-              {course.code}
-            </Text>
-          </View>
-          {onDelete ? (
-            <Pressable
-              onPress={(e) => {
-                e.stopPropagation();
-                onDelete();
-              }}
-              hitSlop={8}
-              className="w-7 h-7 rounded-full bg-red-600/20 items-center justify-center active:opacity-80"
-            >
-              <Text className="text-red-300 text-sm font-bold">✕</Text>
-            </Pressable>
-          ) : null}
-        </View>
+        <Text
+          className="text-white text-base font-semibold"
+          numberOfLines={2}
+        >
+          {course.name}
+        </Text>
+        <Text className="text-slate-400 text-xs mt-1" numberOfLines={1}>
+          {course.code}
+        </Text>
         {showInstructor && course.teacherName ? (
           <Text className="text-slate-400 text-xs mt-2" numberOfLines={1}>
             👤 {course.teacherName}

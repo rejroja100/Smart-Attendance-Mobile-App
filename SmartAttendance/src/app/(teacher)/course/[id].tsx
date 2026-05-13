@@ -27,6 +27,7 @@ import {
   exportAttendance,
   removeStudent as apiRemoveStudent,
   submitManualAttendance,
+  deleteCourse as apiDeleteCourse,
 } from '@/services/api';
 import { LoadingScreen } from '@/components/LoadingScreen';
 import { ErrorMessage } from '@/components/ErrorMessage';
@@ -279,6 +280,50 @@ export default function TeacherCourseDetail(): JSX.Element {
     } finally {
       setDownloading(null);
     }
+  };
+
+  const [deletingCourse, setDeletingCourse] = useState(false);
+
+  const handleDeleteCourse = () => {
+    if (!course) return;
+    Alert.alert(
+      'Delete this course?',
+      `"${course.name}" (${course.code}), all enrolled students, and the full attendance history will be permanently removed. This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete forever',
+          style: 'destructive',
+          onPress: () => {
+            // Second confirmation so a single misclick doesn't nuke the course.
+            Alert.alert(
+              'Are you absolutely sure?',
+              `Type-check: this will delete "${course.code}" forever.`,
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Yes, delete',
+                  style: 'destructive',
+                  onPress: async () => {
+                    setDeletingCourse(true);
+                    try {
+                      await apiDeleteCourse(courseId);
+                      router.replace('/(teacher)');
+                    } catch (e) {
+                      Alert.alert(
+                        'Could not delete course',
+                        e instanceof Error ? e.message : 'Please try again.',
+                      );
+                      setDeletingCourse(false);
+                    }
+                  },
+                },
+              ],
+            );
+          },
+        },
+      ],
+    );
   };
 
   const handleRemoveStudent = (student: Student) => {
@@ -747,6 +792,29 @@ export default function TeacherCourseDetail(): JSX.Element {
             )}
           </View>
         ) : null}
+
+        {/* DANGER ZONE — Delete course */}
+        <View className="rounded-2xl border border-red-600/40 bg-red-600/10 p-4 mb-4">
+          <Text className="text-red-300 text-xs uppercase tracking-widest mb-2 font-semibold">
+            Danger zone
+          </Text>
+          <Text className="text-slate-300 text-sm mb-3">
+            Delete this course and all of its attendance history. This action is permanent and cannot be undone.
+          </Text>
+          <Pressable
+            onPress={handleDeleteCourse}
+            disabled={deletingCourse}
+            className={`rounded-xl bg-red-600 py-3 items-center ${
+              deletingCourse ? 'opacity-60' : 'active:opacity-80'
+            }`}
+          >
+            {deletingCourse ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text className="text-white font-semibold">Delete this course</Text>
+            )}
+          </Pressable>
+        </View>
 
         <View className="h-12" />
       </ScrollView>
