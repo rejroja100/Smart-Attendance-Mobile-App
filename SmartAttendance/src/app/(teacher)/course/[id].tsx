@@ -196,10 +196,22 @@ export default function TeacherCourseDetail(): JSX.Element {
     );
   };
 
-  const handleStartBroadcast = async () => {
-    setBtReviewing(false);
-    btRoster.reset();
-    await broadcast.start(courseId);
+  const handleStartBroadcast = () => {
+    Alert.alert(
+      'Turn on Bluetooth',
+      "Make sure your phone's Bluetooth is ON before continuing. Without it, students nearby cannot detect your device.",
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Continue',
+          onPress: async () => {
+            setBtReviewing(false);
+            btRoster.reset();
+            await broadcast.start(courseId);
+          },
+        },
+      ],
+    );
   };
 
   const handleStopBroadcast = async () => {

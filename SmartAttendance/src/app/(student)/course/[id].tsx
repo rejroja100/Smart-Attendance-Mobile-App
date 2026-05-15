@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Easing,
   Pressable,
@@ -53,21 +54,33 @@ export default function StudentCourseDetail(): JSX.Element {
     }
   };
 
-  const handleScan = async () => {
+  const handleScan = () => {
     if (!course) return;
-    const ok = await scan.scan(courseId);
-    if (ok) {
-      setSuccess({
-        courseName: course.name,
-        method: 'bluetooth',
-        record: {
-          date: formatDate(new Date()),
-          present: true,
-          method: 'bluetooth',
-          timestamp: new Date().toISOString(),
+    Alert.alert(
+      'Turn on Bluetooth',
+      "Make sure your phone's Bluetooth is ON before scanning. Without it, your phone cannot detect the teacher.",
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Continue',
+          onPress: async () => {
+            const ok = await scan.scan(courseId);
+            if (ok) {
+              setSuccess({
+                courseName: course.name,
+                method: 'bluetooth',
+                record: {
+                  date: formatDate(new Date()),
+                  present: true,
+                  method: 'bluetooth',
+                  timestamp: new Date().toISOString(),
+                },
+              });
+            }
+          },
         },
-      });
-    }
+      ],
+    );
   };
 
   if (loading) return <LoadingScreen message="Loading course…" />;

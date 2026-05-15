@@ -18,6 +18,7 @@ export function CourseCard({
 }: CourseCardProps): JSX.Element {
   const accent = randomColor(course.id || course.code);
   const studentCount = course.studentIds?.length ?? 0;
+  const classCount = course.totalClasses ?? 0;
 
   return (
     <Pressable
@@ -42,10 +43,15 @@ export function CourseCard({
             👤 {course.teacherName}
           </Text>
         ) : null}
-        <View className="flex-row items-center mt-4">
-          <View className="px-2 py-1 rounded-full bg-slate-700">
+        <View className="flex-row items-center mt-4 flex-wrap">
+          <View className="px-2 py-1 rounded-full bg-slate-700 mr-1.5 mb-1">
             <Text className="text-slate-200 text-xs">
               👥 {studentCount} {studentCount === 1 ? 'student' : 'students'}
+            </Text>
+          </View>
+          <View className="px-2 py-1 rounded-full bg-slate-700 mb-1">
+            <Text className="text-slate-200 text-xs">
+              📚 {classCount} {classCount === 1 ? 'class' : 'classes'}
             </Text>
           </View>
         </View>

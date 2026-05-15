@@ -24,6 +24,8 @@ export interface Course {
   studentIds: string[];
   enrolledStudents: Student[];
   createdAt: string;
+  /** Total unique class dates ever held for this course (computed server-side). */
+  totalClasses?: number;
 }
 
 export type AttendanceMethod = 'bluetooth' | 'code' | 'manual';

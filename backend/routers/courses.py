@@ -2,9 +2,16 @@ from fastapi import APIRouter, Depends, Request, HTTPException
 
 from middleware.auth_middleware import verify_firebase_token, require_role
 from models.course import CourseRequest, EnrollRequest
-from services import course_service
+from services import course_service, attendance_service
 
 router = APIRouter()
+
+
+def _attach_class_count(course: dict) -> dict:
+    """Compute total unique class dates for a course and attach as `totalClasses`."""
+    records = attendance_service.list_course_attendance(course.get("id"))
+    course["totalClasses"] = len({r.get("date") for r in records if r.get("date")})
+    return course
 
 
 @router.get("/teacher")
@@ -12,7 +19,8 @@ async def get_teacher_courses(
     request: Request,
     _user: dict = Depends(require_role("teacher")),
 ):
-    return course_service.list_teacher_courses(request.state.uid)
+    courses = course_service.list_teacher_courses(request.state.uid)
+    return [_attach_class_count(c) for c in courses]
 
 
 @router.get("/student")
@@ -20,7 +28,8 @@ async def get_student_courses(
     request: Request,
     _user: dict = Depends(require_role("student")),
 ):
-    return course_service.list_student_courses(request.state.uid)
+    courses = course_service.list_student_courses(request.state.uid)
+    return [_attach_class_count(c) for c in courses]
 
 
 @router.post("")
