@@ -22,6 +22,14 @@
           }
         },
         {
+          "client_id": "834613996344-vpuf4b3626ha1gtsrq7lmonkpvtgqtud.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.smartattendance.app",
+            "certificate_hash": "0ef0d80edff448e75c70377bef92bfeb9c5612bd"
+          }
+        },
+        {
           "client_id": "834613996344-7bavji6nf421nevh4adjsv3625i6cse8.apps.googleusercontent.com",
           "client_type": 3
         }
