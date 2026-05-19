@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 from config.firebase_config import db
-from utils.helpers import today_str, now_iso, serialize_doc
+from utils.helpers import today_str, now_iso, serialize_doc, new_session_id
 from services.course_service import get_course, assert_teacher_owns
 
 
@@ -27,16 +27,17 @@ def _record_attendance(
     student_id: str,
     method: str,
     present: bool = True,
-    replace_today: bool = False,
+    session_id: str | None = None,
+    replace_pending_today: bool = False,
 ) -> dict:
     """Append an attendance record to attendance/{courseId}_{studentId}.
 
-    Uses set(merge=True) to ensure parent doc exists, then reads-modifies-writes
-    the records list. By default appends so multiple records per day are kept
-    as history. When `replace_today=True`, any existing records for today are
-    removed first so the new entry becomes the only record for that day — the
-    teacher's manual "Accept" submit uses this to override any auto bluetooth/
-    code records a student created earlier in the same session.
+    Each committed attendance session gets its own `session_id`. Auto-records
+    from Bluetooth or Code submissions are written with `session_id=None`
+    ("pending") and only become committed when the teacher's manual Accept
+    runs, which calls this with `replace_pending_today=True` — that wipes
+    today's pending records for the student and writes the manual record with
+    a fresh `session_id`.
     """
     database = _require_db()
     doc_id = _attendance_doc_id(course_id, student_id)
@@ -55,11 +56,18 @@ def _record_attendance(
     records: list = list(data.get("records", []) or [])
 
     today = today_str()
-    if replace_today:
-        records = [r for r in records if r.get("date") != today]
+    if replace_pending_today:
+        # Drop any of today's records that aren't tied to a committed session
+        # — those are the auto bluetooth/code records the manual submit
+        # supersedes.
+        records = [
+            r for r in records
+            if not (r.get("date") == today and not r.get("sessionId"))
+        ]
 
     new_record = {
         "date": today,
+        "sessionId": session_id,
         "present": bool(present),
         "method": method,
         "timestamp": now_iso(),
@@ -150,6 +158,10 @@ def submit_manual(course_id: str, teacher_uid: str, records: Iterable) -> dict:
     course = get_course(course_id)
     assert_teacher_owns(course, teacher_uid)
 
+    # Single sessionId for every student in this Accept submission — that's
+    # what makes it one "class" in the dashboard / class count.
+    session_id = new_session_id()
+
     count = 0
     for rec in records:
         # rec may be a Pydantic model or a dict
@@ -162,11 +174,12 @@ def submit_manual(course_id: str, teacher_uid: str, records: Iterable) -> dict:
             student_id,
             "manual",
             present=bool(present),
-            replace_today=True,
+            session_id=session_id,
+            replace_pending_today=True,
         )
         count += 1
 
-    return {"success": True, "count": count}
+    return {"success": True, "count": count, "sessionId": session_id}
 
 
 # ---------------------------------------------------------------------------

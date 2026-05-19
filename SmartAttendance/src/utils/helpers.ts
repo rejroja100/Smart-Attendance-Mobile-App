@@ -61,6 +61,19 @@ const COLOR_PALETTE: readonly string[] = [
   'bg-red-500',
 ] as const;
 
+// Generate a random 6-character alphanumeric code for the instructor-code
+// attendance method. Excludes ambiguous characters (0/O, 1/I/L) to make the
+// code easier for students to read off a projector or whiteboard.
+const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+
+export function generateAttendanceCode(length = 6): string {
+  let out = '';
+  for (let i = 0; i < length; i += 1) {
+    out += CODE_ALPHABET.charAt(Math.floor(Math.random() * CODE_ALPHABET.length));
+  }
+  return out;
+}
+
 export function randomColor(seed: string): string {
   if (!seed) return COLOR_PALETTE[0];
   let hash = 0;

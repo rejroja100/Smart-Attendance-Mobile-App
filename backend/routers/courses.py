@@ -8,9 +8,14 @@ router = APIRouter()
 
 
 def _attach_class_count(course: dict) -> dict:
-    """Compute total unique class dates for a course and attach as `totalClasses`."""
+    """Count unique committed attendance sessions and attach as `totalClasses`.
+
+    Each teacher Accept generates a fresh `sessionId`. Multiple Accepts on the
+    same day each count as a separate class. Uncommitted (pending) bluetooth
+    or code records are ignored.
+    """
     records = attendance_service.list_course_attendance(course.get("id"))
-    course["totalClasses"] = len({r.get("date") for r in records if r.get("date")})
+    course["totalClasses"] = len({r.get("sessionId") for r in records if r.get("sessionId")})
     return course
 
 

@@ -27,24 +27,23 @@ async def student_dashboard(
         course_id = course.get("id")
         records = attendance_service.list_course_attendance(course_id)
 
-        # `all_class_dates` counts every unique day the class actually met
-        # (any record from any student on that date counts as "class held").
-        # `per_date` is just THIS student's per-day attendance.
-        # Without `all_class_dates`, a student who joined late would see
-        # 100% even though they missed earlier classes.
-        all_class_dates: set[str] = set()
-        per_date: dict[str, bool] = {}
+        # Multiple committed sessions can happen on the same day, so we count
+        # by `sessionId` (one per teacher's Accept), not by date. Records
+        # without a sessionId are uncommitted auto bluetooth/code marks and
+        # are ignored.
+        all_sessions: set[str] = set()
+        per_session: dict[str, bool] = {}
         for rec in records:
-            date = rec.get("date")
-            if not date:
+            sid = rec.get("sessionId")
+            if not sid:
                 continue
-            all_class_dates.add(date)
+            all_sessions.add(sid)
             if rec.get("studentId") != uid:
                 continue
-            per_date[date] = per_date.get(date, False) or bool(rec.get("present"))
+            per_session[sid] = per_session.get(sid, False) or bool(rec.get("present"))
 
-        total_classes = len(all_class_dates)
-        present_count = sum(1 for v in per_date.values() if v)
+        total_classes = len(all_sessions)
+        present_count = sum(1 for v in per_session.values() if v)
         percentage = round((present_count / total_classes * 100), 1) if total_classes > 0 else 0.0
 
         summary.append(
