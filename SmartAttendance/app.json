@@ -2,6 +2,7 @@
   "expo": {
     "name": "Smart Attendance",
     "slug": "smart-attendance",
+    "owner": "rejroja100",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -54,7 +55,7 @@
         "origin": false
       },
       "eas": {
-        "projectId": "648b5798-064c-445c-9426-c7cd6c32f70a"
+        "projectId": "ce4d9ed8-052b-4186-855f-42d7e9f700d4"
       }
     }
   }
