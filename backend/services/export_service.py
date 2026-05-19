@@ -114,18 +114,42 @@ class ExportService:
         return buffer
 
 
-def build_attendance_export_payload(course: dict, db):
-    """Build (course, students_list, attendance_map, dates_sorted) for export.
+def _format_session_label(date_str: str, timestamp_str: str) -> str:
+    """Human-readable session header for export columns.
 
-    For each enrolled student, reads attendance/{courseId}_{studentId}, collapses
-    multiple records per date into a single boolean (present if ANY record is True),
-    and aggregates the unique sorted dates across the course.
+    Single session on a date → "2026-05-12".
+    Multiple sessions same date → "2026-05-12 10:30", "2026-05-12 14:15", etc.
+    Caller decides which form to use based on the per-date session count.
+    """
+    if not timestamp_str:
+        return date_str or ""
+    try:
+        dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+        return f"{date_str} {dt.strftime('%H:%M')}"
+    except Exception:
+        return date_str or ""
+
+
+def build_attendance_export_payload(course: dict, db):
+    """Build (course, students_list, attendance_map, session_labels) for export.
+
+    Each committed attendance session (one teacher Accept) gets its own
+    column in the report. If the teacher ran multiple sessions on the same
+    day, each becomes its own column tagged with date + start time —
+    "2026-05-12 10:30", "2026-05-12 14:15", etc. Records without a
+    sessionId (uncommitted bluetooth / code marks) are ignored.
     """
     course_id = course.get("id")
     students_list = list(course.get("enrolledStudents") or [])
 
-    attendance_map: dict[str, dict[str, bool]] = {}
-    all_dates: set[str] = set()
+    # First pass: gather every committed session across all students, recording
+    # its date and the earliest timestamp (we use that as the session "start
+    # time" for the column header).
+    session_dates: dict[str, str] = {}     # sessionId -> date
+    session_earliest: dict[str, str] = {}  # sessionId -> earliest ISO timestamp
+
+    # Also build per-student per-session present/absent map.
+    per_student_session: dict[str, dict[str, bool]] = {}
 
     for student in students_list:
         sid = (student or {}).get("id")
@@ -133,18 +157,65 @@ def build_attendance_export_payload(course: dict, db):
             continue
         doc_id = f"{course_id}_{sid}"
         snap = db.collection("attendance").document(doc_id).get()
-        per_date: dict[str, bool] = {}
+        student_map: dict[str, bool] = {}
         if snap.exists:
             data = snap.to_dict() or {}
             for rec in data.get("records", []) or []:
-                date = rec.get("date")
-                present = bool(rec.get("present"))
-                if not date:
-                    continue
-                # Present if ANY record on the date is True
-                per_date[date] = per_date.get(date, False) or present
-                all_dates.add(date)
-        attendance_map[sid] = per_date
+                session_id = rec.get("sessionId")
+                if not session_id:
+                    continue  # skip uncommitted records
+                date = rec.get("date") or ""
+                ts = rec.get("timestamp") or ""
 
-    dates_sorted = sorted(all_dates)
-    return course, students_list, attendance_map, dates_sorted
+                # Record session metadata once per session.
+                if session_id not in session_dates:
+                    session_dates[session_id] = date
+                if session_id not in session_earliest or ts < session_earliest[session_id]:
+                    session_earliest[session_id] = ts
+
+                # Per-student per-session — present if ANY record for that
+                # session is True (in practice manual submit is single-record).
+                prior = student_map.get(session_id, False)
+                student_map[session_id] = prior or bool(rec.get("present"))
+        per_student_session[sid] = student_map
+
+    # Sort sessions chronologically by their earliest timestamp.
+    sorted_session_ids = sorted(
+        session_dates.keys(),
+        key=lambda s: (session_earliest.get(s, ""), session_dates.get(s, "")),
+    )
+
+    # Decide labels — only include the time component when a date has more than
+    # one session, so single-session days stay clean.
+    sessions_per_date: dict[str, int] = {}
+    for sid in sorted_session_ids:
+        date = session_dates[sid]
+        sessions_per_date[date] = sessions_per_date.get(date, 0) + 1
+
+    session_labels: list[str] = []
+    label_by_session: dict[str, str] = {}
+    for sid in sorted_session_ids:
+        date = session_dates[sid]
+        if sessions_per_date.get(date, 0) > 1:
+            label = _format_session_label(date, session_earliest.get(sid, ""))
+        else:
+            label = date
+        # Disambiguate collisions defensively (same date + time down to the minute)
+        original = label
+        suffix = 2
+        while label in label_by_session.values():
+            label = f"{original} #{suffix}"
+            suffix += 1
+        session_labels.append(label)
+        label_by_session[sid] = label
+
+    # Translate per-student per-session map into per-student per-label map.
+    attendance_map: dict[str, dict[str, bool]] = {}
+    for sid, student_map in per_student_session.items():
+        attendance_map[sid] = {
+            label_by_session[session_id]: present
+            for session_id, present in student_map.items()
+            if session_id in label_by_session
+        }
+
+    return course, students_list, attendance_map, session_labels
