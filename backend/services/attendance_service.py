@@ -266,6 +266,7 @@ def list_course_attendance(course_id: str) -> List[dict]:
                 {
                     "studentId": student_id,
                     "date": rec.get("date"),
+                    "sessionId": rec.get("sessionId"),
                     "present": rec.get("present"),
                     "method": rec.get("method"),
                     "timestamp": rec.get("timestamp"),
